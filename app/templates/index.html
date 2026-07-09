@@ -13,12 +13,39 @@
       <p class="subtitle">Flask &middot; Docker &middot; Terraform &middot; GitHub Actions &middot; EC2</p>
     </header>
 
-    <section class="video-wrapper">
-      <video controls autoplay muted loop playsinline>
-        <source src="{{ video_url }}" type="video/mp4" />
-        Your browser does not support the video tag.
-      </video>
+    <section class="media">
+      <!-- Shown first: the poster image + a button to reveal the video. -->
+      <div class="poster" id="poster">
+        <img src="{{ url_for('static', filename='image.png') }}" alt="Video preview" />
+        <button type="button" class="watch-btn" id="watch-btn">▶ Watch a video</button>
+      </div>
+
+      <!-- Hidden until the button is clicked. -->
+      <div class="video-wrapper hidden" id="player">
+        <video id="video" controls playsinline>
+          <source src="{{ video_url }}" type="video/mp4" />
+          Your browser does not support the video tag.
+        </video>
+      </div>
     </section>
+
+    <script>
+      (function () {
+        var poster = document.getElementById("poster");
+        var player = document.getElementById("player");
+        var video = document.getElementById("video");
+
+        function reveal() {
+          poster.classList.add("hidden");
+          player.classList.remove("hidden");
+          video.play().catch(function () {
+            /* If autoplay is blocked, the controls let the user press play. */
+          });
+        }
+
+        poster.addEventListener("click", reveal);
+      })();
+    </script>
 
     <footer>
       <span class="badge">version: {{ version }}</span>
