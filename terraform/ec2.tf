@@ -59,7 +59,8 @@ resource "aws_instance" "web" {
   }
 
   root_block_device {
-    volume_size = 20
+    # AL2023's AMI snapshot is 30 GB, so the root volume must be >= 30.
+    volume_size = var.root_volume_size
     volume_type = "gp3"
     encrypted   = true
   }

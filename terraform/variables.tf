@@ -33,6 +33,17 @@ variable "instance_type" {
   default     = "t3.micro"
 }
 
+variable "root_volume_size" {
+  description = "Root EBS volume size in GB. Must be >= 30 (the AL2023 AMI snapshot size)."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.root_volume_size >= 30
+    error_message = "root_volume_size must be at least 30 GB (the AL2023 AMI snapshot size)."
+  }
+}
+
 variable "my_ip_cidr" {
   description = <<-EOT
     Your public IP in CIDR form (e.g. "203.0.113.5/32") allowed to SSH.
