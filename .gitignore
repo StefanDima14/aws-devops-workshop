@@ -21,3 +21,6 @@ venv/
 
 # OS / editor
 .DS_Store
+
+# Claude Code local settings
+.claude/

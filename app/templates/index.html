@@ -16,7 +16,9 @@
     <section class="media">
       <!-- Shown first: the poster image + a button to reveal the video. -->
       <div class="poster" id="poster">
-        <img src="{{ url_for('static', filename='image.png') }}" alt="Video preview" />
+        <div class="poster-frame">
+          <img src="{{ url_for('static', filename='image.png') }}" alt="Video preview" />
+        </div>
         <button type="button" class="watch-btn" id="watch-btn">▶ Watch a video</button>
       </div>
 
