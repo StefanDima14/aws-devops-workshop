@@ -1,0 +1,11 @@
+# Partial backend config for the S3 remote state.
+# Copy to backend.hcl and set your bucket name (must be globally unique).
+# Create these resources first with:  ../scripts/bootstrap-backend.sh
+#
+#   terraform init -backend-config=backend.hcl
+
+bucket         = "CHANGEME-devops-workshop-tfstate"
+key            = "devops-workshop/terraform.tfstate"
+region         = "eu-west-1"
+dynamodb_table = "devops-workshop-tf-locks"
+encrypt        = true

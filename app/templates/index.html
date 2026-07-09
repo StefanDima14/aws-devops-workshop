@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AWS DevOps Workshop</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <main class="container">
+    <header>
+      <h1>🚀 Deployed on AWS via CI/CD</h1>
+      <p class="subtitle">Flask &middot; Docker &middot; Terraform &middot; GitHub Actions &middot; EC2</p>
+    </header>
+
+    <section class="video-wrapper">
+      <video controls autoplay muted loop playsinline>
+        <source src="{{ video_url }}" type="video/mp4" />
+        Your browser does not support the video tag.
+      </video>
+    </section>
+
+    <footer>
+      <span class="badge">version: {{ version }}</span>
+      <span class="badge">host: {{ hostname }}</span>
+    </footer>
+  </main>
+</body>
+</html>

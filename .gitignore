@@ -1,0 +1,23 @@
+# Terraform (commit .terraform.lock.hcl — it pins provider versions)
+terraform/.terraform/
+*.tfstate
+*.tfstate.*
+terraform/tfplan
+plan.txt
+# Local config (never commit secrets / real values)
+terraform/terraform.tfvars
+terraform/backend.hcl
+*.pem
+
+# Video assets (large binaries live in S3, not git)
+assets/*.mp4
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# OS / editor
+.DS_Store

@@ -1,0 +1,182 @@
+name: CI/CD Pipeline
+
+# When does this run? On every push to main, and on PRs (tests only).
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Prevent overlapping deploys of the same branch.
+concurrency:
+  group: cicd-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-west-1
+  ECR_REPOSITORY: devops-workshop-dev   # must match Terraform: "<project>-<env>"
+  INSTANCE_NAME_TAG: devops-workshop-dev-web  # must match aws_instance.web Name tag
+  APP_PORT: 8080
+  # SSM Parameter Store prefix where Terraform published the video bucket/key.
+  # Must match "/<project>-<env>/video" (see terraform/s3.tf).
+  VIDEO_PARAM_PREFIX: /devops-workshop-dev/video
+
+# OIDC lets GitHub authenticate to AWS without long-lived secret keys.
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # STAGE 1: TEST — run unit tests. Fails fast before we build anything.
+  # ---------------------------------------------------------------------------
+  test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r app/requirements.txt
+          pip install -r tests/requirements-dev.txt
+
+      - name: Run unit tests
+        run: pytest tests/ -v
+
+  # ---------------------------------------------------------------------------
+  # STAGE 2: BUILD & SCAN — build the Docker image, scan it with Trivy.
+  # Runs only on push to main (not on PRs).
+  # ---------------------------------------------------------------------------
+  build-and-scan:
+    name: Build, Scan & Push Image
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (via OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Compute image tag
+        id: meta
+        run: echo "image_tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Docker image
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          IMAGE="$REGISTRY/${ECR_REPOSITORY}:${{ steps.meta.outputs.image_tag }}"
+          docker build -t "$IMAGE" -t "$REGISTRY/${ECR_REPOSITORY}:latest" ./app
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      # Scan the built image. Fail the pipeline on HIGH/CRITICAL vulnerabilities.
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          format: table
+          exit-code: "1"          # fail build if vulns found at/above severity
+          ignore-unfixed: true    # don't fail on vulns with no available fix
+          severity: HIGH,CRITICAL
+
+      - name: Push image to ECR
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker push "$REGISTRY/${ECR_REPOSITORY}:${{ steps.meta.outputs.image_tag }}"
+          docker push "$REGISTRY/${ECR_REPOSITORY}:latest"
+
+  # ---------------------------------------------------------------------------
+  # STAGE 3: DEPLOY — tell the EC2 box (via SSM, no SSH) to pull & run the image.
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    needs: build-and-scan
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Configure AWS credentials (via OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve ECR registry & instance
+        id: ctx
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "registry=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com" >> "$GITHUB_OUTPUT"
+          # Find the instance by its Name tag (set in Terraform).
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=${INSTANCE_NAME_TAG}" \
+                      "Name=instance-state-name,Values=running" \
+            --query "Reservations[0].Instances[0].InstanceId" --output text)
+          echo "instance_id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
+
+      # Send remote commands to the instance via SSM Run Command.
+      - name: Deploy container via SSM
+        env:
+          REGISTRY: ${{ steps.ctx.outputs.registry }}
+          INSTANCE_ID: ${{ steps.ctx.outputs.instance_id }}
+          IMAGE_TAG: ${{ needs.build-and-scan.outputs.image_tag }}
+        run: |
+          IMAGE="$REGISTRY/${ECR_REPOSITORY}:${IMAGE_TAG}"
+
+          # Discover the private video bucket/key Terraform published to SSM,
+          # so the container reads the video from S3 (via presigned URLs).
+          VIDEO_BUCKET=$(aws ssm get-parameter --name "${VIDEO_PARAM_PREFIX}/bucket" \
+            --query "Parameter.Value" --output text)
+          VIDEO_KEY=$(aws ssm get-parameter --name "${VIDEO_PARAM_PREFIX}/key" \
+            --query "Parameter.Value" --output text)
+          echo "Deploying $IMAGE (video s3://$VIDEO_BUCKET/$VIDEO_KEY)"
+
+          CMD_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Deploy $IMAGE" \
+            --parameters commands="[\
+              \"set -e\",\
+              \"aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${REGISTRY}\",\
+              \"docker pull ${IMAGE}\",\
+              \"docker rm -f workshop-app || true\",\
+              \"docker run -d --name workshop-app --restart unless-stopped -p 80:${APP_PORT} -e AWS_REGION='${AWS_REGION}' -e VIDEO_BUCKET='${VIDEO_BUCKET}' -e VIDEO_OBJECT_KEY='${VIDEO_KEY}' -e APP_VERSION='${IMAGE_TAG}' ${IMAGE}\"\
+            ]" \
+            --query "Command.CommandId" --output text)
+
+          echo "SSM Command ID: $CMD_ID"
+
+          # Wait for the command to finish and surface success/failure.
+          aws ssm wait command-executed \
+            --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" || true
+
+          STATUS=$(aws ssm get-command-invocation \
+            --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+            --query "Status" --output text)
+          echo "Deploy status: $STATUS"
+
+          aws ssm get-command-invocation \
+            --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+            --query "StandardOutputContent" --output text
+
+          [ "$STATUS" = "Success" ] || exit 1
+
+      - name: Deployment summary
+        run: echo "✅ Deployed. Open the app_url from your terraform output."

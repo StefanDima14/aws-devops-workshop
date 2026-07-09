@@ -1,0 +1,102 @@
+name: Infrastructure (Terraform)
+
+# Runs only when Terraform code changes. PRs get fmt/validate/plan for review;
+# pushes to main additionally apply the plan.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - ".github/workflows/infra.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - ".github/workflows/infra.yml"
+
+# Never let two infra runs mutate state at once.
+concurrency:
+  group: infra-${{ github.ref }}
+  cancel-in-progress: false
+
+# OIDC for keyless AWS auth; pull-requests: write to post the plan on the PR.
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+env:
+  AWS_REGION: eu-west-1
+  TF_VERSION: "1.9.5"
+  # Terraform variables supplied to every command (no secrets in state inputs).
+  TF_VAR_github_repo: ${{ github.repository }}
+  TF_VAR_my_ip_cidr: ${{ vars.MY_IP_CIDR || '0.0.0.0/32' }}
+
+jobs:
+  terraform:
+    name: fmt · validate · plan · apply
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (via OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_TF_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform fmt (check)
+        run: terraform fmt -check -recursive
+
+      - name: Terraform init
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="dynamodb_table=${{ vars.TF_LOCK_TABLE }}" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="key=devops-workshop/terraform.tfstate"
+
+      - name: Terraform validate
+        run: terraform validate -no-color
+
+      - name: Terraform plan
+        id: plan
+        run: |
+          terraform plan -no-color -input=false -out=tfplan | tee plan.txt
+          {
+            echo "### Terraform plan"
+            echo '```'
+            tail -c 60000 plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # On PRs, surface the plan as a comment so reviewers see it inline.
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let plan = fs.readFileSync('terraform/plan.txt', 'utf8');
+            if (plan.length > 60000) plan = plan.slice(-60000);
+            const body = `#### Terraform plan 📖\n<details><summary>Show plan</summary>\n\n\`\`\`\n${plan}\n\`\`\`\n</details>`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      # Apply only on push to main, using the exact plan we just reviewed.
+      - name: Terraform apply
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: terraform apply -no-color -input=false -auto-approve tfplan
