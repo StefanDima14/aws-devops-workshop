@@ -1,8 +1,9 @@
 name: Infrastructure (Terraform)
 
 # Runs only when Terraform code changes. PRs get fmt/validate/plan for review;
-# pushes to main additionally apply the plan.
+# pushes to main and manual runs additionally apply the plan.
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
@@ -96,7 +97,9 @@ jobs:
               body,
             });
 
-      # Apply only on push to main, using the exact plan we just reviewed.
+      # Apply on push to main and on manual runs, using the exact plan we just reviewed.
       - name: Terraform apply
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: |
+          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          github.event_name == 'workflow_dispatch'
         run: terraform apply -no-color -input=false -auto-approve tfplan
