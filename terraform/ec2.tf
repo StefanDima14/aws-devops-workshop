@@ -35,6 +35,12 @@ locals {
     systemctl enable --now docker
     usermod -aG docker ec2-user
 
+    # The SSM agent ships with AL2023, but the deploy pipeline can only reach the
+    # box once the agent has registered with Systems Manager — so make sure it is
+    # enabled and running rather than assuming it.
+    dnf install -y amazon-ssm-agent || true
+    systemctl enable --now amazon-ssm-agent
+
     # Install the AWS CLI is already present on AL2023; nothing else needed.
     # The container itself is deployed later by the GitHub Actions pipeline.
     echo "Bootstrap complete. Docker is ready." > /var/log/workshop-bootstrap.log
@@ -48,6 +54,10 @@ resource "aws_instance" "web" {
   vpc_security_group_ids = [aws_security_group.web.id]
   iam_instance_profile   = aws_iam_instance_profile.ec2.name
   user_data              = local.user_data
+
+  # user_data only runs on first boot, so editing the script is only meaningful
+  # on a fresh instance: replace the box instead of a no-op stop/start.
+  user_data_replace_on_change = true
 
   # Attach an SSH key only if one was provided.
   key_name = var.key_pair_name != "" ? var.key_pair_name : null
