@@ -10,8 +10,9 @@ plan.txt
 **/backend.hcl
 *.pem
 
-# Video assets (large binaries live in S3, not git)
-assets/*.mp4
+# The demo video IS committed (it's a few MB) so that `terraform apply` can upload
+# it to S3 from the pipeline, where no one has your laptop's files. A multi-GB asset
+# would not belong in git — you'd upload it to S3 out of band instead.
 
 # Python
 __pycache__/

@@ -73,13 +73,14 @@ variable "video_object_key" {
 
 variable "video_source_path" {
   description = <<-EOT
-    Local path to a video file to upload to the S3 bucket on `terraform apply`.
-    Leave empty ("") to create the bucket now and upload the object yourself later:
+    Path to the video file uploaded to the S3 bucket on `terraform apply`.
+    Defaults to the copy committed in assets/, so the pipeline (which has no access
+    to your laptop's files) uploads it too and every fresh environment works.
+    Set to "" to skip the upload and put the object there yourself:
       aws s3 cp video.mp4 s3://<bucket>/<key>
-    Example: "../assets/video.mp4"
   EOT
   type        = string
-  default     = ""
+  default     = "../assets/video.mp4"
 }
 
 variable "presigned_url_expiry" {

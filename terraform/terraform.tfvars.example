@@ -20,9 +20,11 @@ key_pair_name = ""
 # Object key the app reads from the bucket.
 video_object_key = "video.mp4"
 
-# Optional: upload a local video on `terraform apply`. Leave "" to upload later
-# with: aws s3 cp video.mp4 s3://<bucket>/<key>
-video_source_path = ""
+# The video is uploaded on every `terraform apply` — including from the pipeline,
+# which is why assets/video.mp4 is committed to git. Leave this commented out to
+# take the default (../assets/video.mp4); set it to "" to skip the upload and put
+# the object there yourself with: aws s3 cp video.mp4 s3://<bucket>/<key>
+# video_source_path = "../assets/video.mp4"
 
 # Presigned URL lifetime (seconds).
 presigned_url_expiry = 3600

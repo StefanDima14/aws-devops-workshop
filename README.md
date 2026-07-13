@@ -6,8 +6,14 @@ in a company.
 
 The app itself is deliberately boring: a small Python web page that plays a video.
 The *interesting* part is everything around it — how the code is tested, packaged,
-scanned for security holes, and deployed to the cloud **automatically, every time
-someone pushes to `main`**, with zero manual clicking and zero passwords lying around.
+scanned for security holes, and deployed to the cloud **by a pipeline you start with
+one click**, with zero manual clicking in AWS and zero passwords lying around.
+
+> **A note on triggers.** Both pipelines here are **manual** (`workflow_dispatch`): you
+> start them from the GitHub **Actions** tab. That's a teaching choice — it lets an
+> instructor create and destroy the whole environment live, on demand. In a real
+> project you would wire the app pipeline to run on every push to `main`; [section
+> 9](#9-the-pipelines-githubworkflows--the-heart-of-cicd) shows you exactly how.
 
 By the end you will have:
 
@@ -180,7 +186,7 @@ use **OIDC**:
 
 1. GitHub Actions generates a short-lived, cryptographically signed token that says
    *"I am a workflow running in the repo `you/your-repo`."*
-2. AWS has been told (by Terraform, in [github_oidc.tf](terraform/github_oidc.tf))
+2. AWS has been told (by Terraform, in [bootstrap/iam.tf](terraform/bootstrap/iam.tf))
    to **trust tokens from that specific repository**.
 3. AWS swaps the token for temporary credentials that expire in about an hour.
 
@@ -215,67 +221,96 @@ export TF_STATE_BUCKET=<your-initials>-devops-workshop-tfstate   # must be globa
 ./scripts/bootstrap-backend.sh
 ```
 
-### Step 3 — Configure Terraform
+### Step 3 — Create the pipeline's AWS identity (the `bootstrap` stack, once)
+
+There are **two** Terraform stacks in this repo, and the difference matters:
+
+| Stack | What's in it | Who runs it | How often |
+|---|---|---|---|
+| [terraform/bootstrap/](terraform/bootstrap/) | the OIDC provider + the two IAM roles the pipelines log in with | **you, from your laptop** | once |
+| [terraform/](terraform/) | VPC, EC2, ECR, S3 — the actual environment | the infra pipeline (or you) | created & destroyed freely |
+
+**Why separate?** The infra pipeline *assumes* the role in the bootstrap stack. If that
+role lived in the same state as everything else, `terraform destroy` would delete the
+credentials it is using **halfway through its own run** — and no later `apply` could
+authenticate to rebuild. Separating them means you can destroy and recreate the
+environment as many times as you like. (Chicken and egg: a role cannot create itself,
+so you are the chicken, exactly once.)
 
 ```bash
-cd terraform
+cd terraform/bootstrap
 cp backend.hcl.example backend.hcl              # ← set your state bucket name
-cp terraform.tfvars.example terraform.tfvars    # ← your settings
-```
+cp terraform.tfvars.example terraform.tfvars    # ← set github_repo = "your-user/your-repo"
 
-In `terraform.tfvars` you **must** set two values:
-
-```hcl
-my_ip_cidr  = "203.0.113.5/32"          # your public IP: curl -s https://checkip.amazonaws.com
-github_repo = "your-user/your-repo"     # so AWS knows which repo to trust for OIDC
-```
-
-Then initialise Terraform (this downloads the AWS provider and connects to the state):
-
-```bash
 terraform init -backend-config=backend.hcl
-```
-
-> Both `terraform.tfvars` and `backend.hcl` are **git-ignored** on purpose — your real
-> values stay on your machine.
-
-### Step 4 — Create the infrastructure (the first `apply` runs from your laptop)
-
-Why locally? Because this `apply` **creates the very IAM roles the pipeline will use**,
-and a role cannot create itself. Chicken and egg — you're the chicken, once.
-
-```bash
 terraform apply     # read the plan, then type: yes
+terraform output    # ← two role ARNs; you need them in step 6
 ```
-
-Terraform prints a list of **outputs** when it finishes. You'll need these:
 
 | Output | What you do with it |
 |---|---|
 | `github_actions_role_arn` | → GitHub **secret** `AWS_ROLE_ARN` (app pipeline) |
 | `github_terraform_role_arn` | → GitHub **secret** `AWS_TF_ROLE_ARN` (infra pipeline) |
+
+### Step 4 — Configure and create the environment (the `terraform/` stack)
+
+```bash
+cd ..                                           # back to terraform/
+cp backend.hcl.example backend.hcl              # ← same bucket, different state key
+cp terraform.tfvars.example terraform.tfvars
+```
+
+In `terraform.tfvars` you **must** set your IP:
+
+```hcl
+my_ip_cidr = "203.0.113.5/32"     # your public IP: curl -s https://checkip.amazonaws.com
+```
+
+> `github_repo` is **not** here — it belongs to the bootstrap stack, which owns the OIDC
+> trust. Both `terraform.tfvars` and `backend.hcl` are **git-ignored** on purpose: your
+> real values stay on your machine.
+
+```bash
+terraform init -backend-config=backend.hcl
+terraform apply     # read the plan, then type: yes
+```
+
+You can run this first `apply` from your laptop, or — once the secrets from step 6 are
+in place — from the **Actions** tab, which is the more impressive demo. Terraform prints
+the outputs you'll need:
+
+| Output | What you do with it |
+|---|---|
 | `video_bucket_name` | where you upload the video |
 | `app_url` | your app's URL (works after the first deploy) |
 
-### Step 5 — Upload the video to S3
+### Step 5 — The video (nothing to do)
 
-The app streams the video from the private bucket, so put a file there. Drop any MP4
-into `assets/video.mp4` (video files are git-ignored — **big binaries belong in S3, not
-in git**), then upload it:
+The app streams the video from the private bucket, and **Terraform put it there during
+step 4**: [assets/video.mp4](assets/) is committed to the repo, and `aws_s3_object.video`
+uploads it on every `apply` — including when the *pipeline* applies, which has no access
+to your laptop's files. Swap in your own clip by replacing that file and re-applying.
+
+This is why the bucket is never empty on a fresh environment: destroy it, recreate it,
+and the video is uploaded again automatically. **Anything the pipeline needs must exist
+in the repo** — a runner is a blank machine.
+
+> Committing a binary is a judgement call. A few MB of demo video: fine, and it makes
+> the environment reproducible. A multi-GB asset: no — you'd upload it to S3 out of band
+> and leave `video_source_path = ""`, which skips the upload entirely.
+
+To upload by hand instead (or to replace the object without an apply):
 
 ```bash
 BUCKET=$(terraform output -raw video_bucket_name)
 aws s3 cp ../assets/video.mp4 "s3://$BUCKET/video.mp4"
 ```
 
-> Prefer Terraform to do the upload? Set `video_source_path = "../assets/video.mp4"` in
-> `terraform.tfvars` and re-apply.
-
 ### Step 6 — Give the pipelines their AWS access
 
 In GitHub: **Settings → Secrets and variables → Actions**
 
-**Secrets** (paste the values Terraform printed):
+**Secrets** (paste the two ARNs the *bootstrap* stack printed in step 3):
 - `AWS_ROLE_ARN` = `github_actions_role_arn`
 - `AWS_TF_ROLE_ARN` = `github_terraform_role_arn`
 
@@ -284,14 +319,17 @@ In GitHub: **Settings → Secrets and variables → Actions**
 - `TF_LOCK_TABLE` = `devops-workshop-tf-locks`
 - `MY_IP_CIDR` = your IP CIDR *(only used if you enable SSH)*
 
-### Step 7 — Push, and watch the robot work
+### Step 7 — Run the pipeline, and watch the robot work
 
-```bash
-git commit --allow-empty -m "trigger my first deploy" && git push
-```
+Both pipelines are **manual**, so you start this one yourself. In GitHub:
 
-Open the **Actions** tab in GitHub. You'll see three jobs run in order:
-`Lint & Test` → `Build, Scan & Push Image` → `Deploy to EC2`.
+**Actions** → **CI/CD Pipeline** → **Run workflow** → *Run workflow*
+
+You'll see three jobs run in order: `Lint & Test` → `Build, Scan & Push Image` →
+`Deploy to EC2`. A failure in any one of them stops the deploy.
+
+> The **Run workflow** button only appears once the workflow file exists on your
+> default branch (`main`). If you don't see it, you haven't pushed yet — do step 1.
 
 ### Step 8 — Open your app 🎬
 
@@ -436,16 +474,31 @@ reviewed in a pull request, rolled back with git, and rebuilt from scratch in mi
 | [ec2.tf](terraform/ec2.tf) | **EC2 instance**, **Elastic IP** | The virtual machine. On first boot it installs Docker (that's the `user_data` script). The Elastic IP is a **fixed** public address, so your app's URL doesn't change if the machine restarts. The disk is encrypted and IMDSv2 is enforced (a security hardening that blocks a common credential-theft attack). |
 | [s3.tf](terraform/s3.tf) | **S3 bucket** (private, versioned, encrypted), optional **video object**, **IAM policy**, 2 **SSM parameters** | Where the video lives. Public access is fully blocked; versioning means an accidental overwrite is recoverable; the IAM policy lets the EC2 server read **only** this bucket's objects. The bucket name gets a random suffix (S3 names are globally unique), so Terraform publishes the name to **SSM Parameter Store** for the pipeline to look up — nothing is hardcoded. |
 | [ecr_iam.tf](terraform/ecr_iam.tf) | **ECR repository** + lifecycle policy, **IAM role & instance profile** for EC2 | The private Docker registry (keeping only the last 10 images, to control cost), and the identity the server runs as. That role can: pull from ECR, be managed by SSM, and read the video object. Nothing more — **least privilege**. |
-| [github_oidc.tf](terraform/github_oidc.tf) | **OIDC provider**, **IAM role** for the app pipeline | The trust relationship that lets GitHub Actions log into AWS with no password. This role can push images to ECR and send a deploy command to the instance — that's all it can do. |
-| [github_terraform.tf](terraform/github_terraform.tf) | **IAM role** for the infra pipeline | A second role for the *infrastructure* pipeline. It has broad (`AdministratorAccess`) permissions because it manages everything — in a real company you'd narrow this and require human approval before `apply`. |
-| [outputs.tf](terraform/outputs.tf) | *(no resources)* | The values Terraform prints at the end: your `app_url`, the role ARNs, the bucket name. |
+| [outputs.tf](terraform/outputs.tf) | *(no resources)* | The values Terraform prints at the end: your `app_url`, the bucket name. |
+
+The **bootstrap** stack is a separate state with a single file:
+
+| File | Resources it creates | In plain English |
+|---|---|---|
+| [bootstrap/iam.tf](terraform/bootstrap/iam.tf) | **OIDC provider**, **IAM role** for the app pipeline, **IAM role** for the infra pipeline | The trust relationship that lets GitHub Actions log into AWS with no password, plus the two roles it can assume. Applied once from your laptop; never touched by a pipeline. |
 
 ### Two roles, two pipelines — why?
 
 Notice there are **two** OIDC roles. The app pipeline's role can push a Docker image
-and restart a container; it *cannot* delete your database or create IAM users. If that
-pipeline were ever compromised, the blast radius is tiny. **Separating permissions by
-job is what "least privilege" means in practice.**
+and restart a container; it *cannot* delete your database or create IAM users. The infra
+pipeline's role is the powerful one (`AdministratorAccess`, because it manages
+everything) — in a real company you'd narrow it and require human approval before
+`apply`. If the app pipeline were ever compromised, the blast radius is tiny.
+**Separating permissions by job is what "least privilege" means in practice.**
+
+### Why the bootstrap stack is separate — the lesson worth remembering
+
+**A stack must never own the credentials used to manage it.** Put the CI role in the
+same state as the servers, and `terraform destroy` will delete that role part-way
+through its own run: the remaining API calls fail, you're left with a half-destroyed
+environment, and the pipeline can no longer authenticate to clean up or rebuild. Real
+teams hit this and it is genuinely painful. The fix is the one used here — a tiny,
+long-lived *bootstrap* state for identity, and a disposable state for everything else.
 
 ---
 
@@ -458,7 +511,7 @@ whole safety mechanism: *a failure anywhere stops the deploy.*
 
 ### Pipeline A — the app: [cicd.yml](.github/workflows/cicd.yml)
 
-**Triggers:** every push to `main`, and every pull request targeting `main`.
+**Trigger:** manual — **Actions → CI/CD Pipeline → Run workflow**.
 
 ```mermaid
 flowchart LR
@@ -474,12 +527,12 @@ flowchart LR
 #### Stage 1 — `test` (Lint & Test)
 Checks out the code, installs Python 3.12 and the dependencies, and runs `pytest`.
 
-**This runs on pull requests too**, and it's the cheapest, fastest gate: it takes ~20
-seconds and it runs *before anything is built*. **Fail fast** — never spend three
-minutes building an image for code that doesn't pass its tests.
+It's the cheapest, fastest gate: it takes ~20 seconds and it runs *before anything is
+built*. **Fail fast** — never spend three minutes building an image for code that
+doesn't pass its tests.
 
 #### Stage 2 — `build-and-scan` (Build, Scan & Push Image)
-Runs only on a push to `main` (`needs: test`, so only if the tests passed).
+`needs: test`, so it runs only if the tests passed.
 
 1. **Authenticate to AWS via OIDC** — no keys, remember.
 2. **Compute the image tag:** `${GITHUB_SHA::7}` — the first 7 characters of the git
@@ -526,19 +579,38 @@ app back up if the server reboots.
 
 ### Pipeline B — the infrastructure: [infra.yml](.github/workflows/infra.yml)
 
-**Triggers:** only when something under `terraform/**` changes.
+**Trigger:** manual, with a choice of what to do — **Actions → Infrastructure
+(Terraform) → Run workflow**, then pick an **action**:
+
+| Action | What happens | When you'd pick it |
+|---|---|---|
+| **`plan`** *(default)* | fmt → init → validate → `terraform plan`. **Changes nothing.** | Always, first. Read the plan in the run summary. |
+| **`apply`** | The same, then applies **the exact plan file** it just showed you | To create or update the environment |
+| **`destroy`** | `terraform plan -destroy`, then applies it — **deletes the environment** | When you're done (see [section 12](#12-clean-up--do-not-skip-this)) |
+
+**Destroy asks you to mean it.** Choosing `destroy` isn't enough: you must also type
+the word `destroy` into the **confirm_destroy** box, or the run fails immediately. A
+dropdown you can hit by accident should never be able to delete your infrastructure.
 
 | Stage | What it does | Why it matters |
 |---|---|---|
 | `fmt -check` | Fails if the code isn't formatted | Style is never a code-review argument again |
 | `init` | Connects to the shared S3 state | Everyone works from the same source of truth |
 | `validate` | Checks the syntax is valid | Catch typos before touching AWS |
-| `plan` | **Shows exactly what would change**, and posts it as a comment on your pull request | 👀 A human reads the plan and approves it *before* AWS is touched |
-| `apply` | Applies **the exact plan file** that was just reviewed — but **only on push to `main`** | You get what you reviewed, nothing else |
+| `plan` | **Shows exactly what would change** (or be destroyed), printed into the run summary | 👀 A human reads the plan *before* AWS is touched |
+| `apply` | Runs **the exact plan file** that was just shown — only for `apply` / `destroy` | You get what you reviewed, nothing else |
 
-This is the single most important pattern in infrastructure work: **plan on the pull
-request, apply on merge.** Nobody ever runs `terraform apply` on production from their
-laptop while guessing what it will do.
+Notice that even a destroy is *planned first, then applied* — the saved plan file
+already encodes the direction, so what executes is precisely what you read.
+
+> **Why manual, and what a real team does instead.** Running the pipeline by hand is a
+> teaching choice: an instructor can create the environment live, deploy to it, and tear
+> it down again in one session. In production you would trigger the app pipeline on every
+> push to `main`, and for infrastructure use the pattern this repo's git history shows:
+> **`plan` automatically on the pull request** (posted as a PR comment for review), and
+> **`apply` on merge**. Nobody runs `terraform apply` against production from their laptop
+> while guessing what it will do. To restore that, add back the `push` / `pull_request`
+> triggers and gate `apply` on `github.ref == 'refs/heads/main'`.
 
 ---
 
@@ -562,9 +634,11 @@ curriculum:
 - **No long-lived secrets.** OIDC instead of access keys; presigned URLs instead of
   public buckets; IAM roles instead of credentials baked into the image.
 - **Discover config, don't hardcode it.** Bucket name → SSM. Instance → found by tag.
-- **Review before you change infrastructure.** `plan` on the PR, `apply` on merge.
-- **Everything is disposable.** `terraform destroy` and `terraform apply` gets it all
-  back, identically.
+- **Review before you change infrastructure.** Always `plan` and read it before `apply`
+  — and in a real team, `plan` on the PR, `apply` on merge.
+- **Everything is disposable.** `destroy` and `apply` gets it all back, identically.
+- **Never let a stack own its own credentials.** Identity lives in a separate, long-lived
+  `bootstrap` state, so destroying the environment can't cut off the hand that rebuilds it.
 
 ---
 
@@ -605,8 +679,15 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
 
 ## 12. Clean up — do not skip this
 
-AWS charges for resources that exist, whether or not you use them. One command removes
-everything Terraform created:
+AWS charges for resources that exist, whether or not you use them.
+
+**The easy way — from the pipeline.** Actions → **Infrastructure (Terraform)** → *Run
+workflow* → action **`destroy`**, and type `destroy` in the **confirm_destroy** box.
+This deletes the whole environment (EC2, EIP, VPC, ECR, S3) and leaves the two IAM
+roles alone, so you can bring it all back later with a single `apply` run. Repeat as
+often as you like — that's the point of the two-stack split.
+
+**Or locally:**
 
 ```bash
 cd terraform && terraform destroy
@@ -614,8 +695,21 @@ cd terraform && terraform destroy
 
 The sneaky one is the **Elastic IP**: AWS charges for a reserved public IP that isn't
 attached to a *running* instance — so simply stopping the instance is not enough.
-Destroy it. (The state bucket and lock table from step 2 are outside Terraform; delete
-them by hand if you're completely done.)
+Destroy it.
+
+**When you are completely finished** and never coming back, remove the leftovers, which
+by design are *not* destroyed above (they cost nothing meaningful, but tidy is tidy):
+
+```bash
+cd terraform/bootstrap && terraform destroy   # the OIDC provider + the two CI roles
+```
+
+> ⚠️ Do this **last**. Destroying the bootstrap stack removes the roles the pipelines
+> log in with, so after this the pipelines can no longer authenticate to AWS at all —
+> you'd have to re-apply `bootstrap` from your laptop to get them back.
+
+The state bucket and lock table from step 2 are outside Terraform entirely; delete them
+by hand if you're done with the account.
 
 ---
 
@@ -625,7 +719,9 @@ them by hand if you're completely done.)
 |---|---|
 | Infra pipeline fails at `init` | You skipped the bootstrap script, or the repo variables `TF_STATE_BUCKET` / `TF_LOCK_TABLE` aren't set. |
 | Infra pipeline fails at `fmt -check` | Run `terraform fmt -recursive` and commit. |
-| `Error: could not assume role` in Actions | The `AWS_ROLE_ARN` / `AWS_TF_ROLE_ARN` secret is missing or wrong, or `github_repo` in `terraform.tfvars` doesn't match your actual repo. |
+| No **Run workflow** button in the Actions tab | The workflow file isn't on your default branch yet. GitHub only offers manual runs for workflows present on `main`. Push, then look again. |
+| `Error: could not assume role` in Actions | The `AWS_ROLE_ARN` / `AWS_TF_ROLE_ARN` secret is missing or wrong, or `github_repo` in **`terraform/bootstrap/terraform.tfvars`** doesn't match your actual repo. If you destroyed the bootstrap stack, the roles no longer exist — re-apply it from your laptop. |
+| Deploy fails: `InvalidInstanceId … Instances not in a valid state` | SSM can't reach the box. Either no instance matches the `Name` tag (has the environment been created?), or the SSM agent hasn't registered yet. Check with `aws ssm describe-instance-information --region eu-west-1` — the instance must appear with `PingStatus: Online`. A freshly created instance takes a minute or two to get there. |
 | Trivy fails the build | **That's the feature working.** Update the base image (`python:3.12-slim`) or the dependency it flagged. Don't disable the scan. |
 | Deploy can't find the instance | It searches for the `Name` tag `devops-workshop-dev-web`. If you changed `project_name` or `environment`, update `ECR_REPOSITORY`, `INSTANCE_NAME_TAG` and `VIDEO_PARAM_PREFIX` in [cicd.yml](.github/workflows/cicd.yml) to match `<project>-<env>`. |
 | Page loads but the video doesn't play | The object isn't in the bucket. Do step 5 (`aws s3 cp`). The app reads the fixed key `video.mp4`. |
@@ -645,14 +741,25 @@ curl localhost/health             # does it answer?
 
 ## 14. Exercises — make it your own
 
-1. **Break a test** on purpose, push, and watch the pipeline refuse to deploy.
-2. **Change the page** (edit `templates/index.html`), push, and watch the footer version
-   change to your new commit SHA.
+1. **Break a test** on purpose, push, run the CI/CD pipeline, and watch it refuse to
+   deploy.
+2. **Change the page** (edit `templates/index.html`), push, re-run the pipeline, and
+   watch the footer version change to your new commit SHA.
 3. **Add a `/version` route** returning the app version, plus a test for it.
 4. **Downgrade the base image** to an older Python and watch Trivy fail the build.
-5. **Change `instance_type`** in `terraform.tfvars`, open a PR, and read the `plan`
-   comment carefully — notice that Terraform tells you it will *replace* the instance.
-6. **Harder:** put an Application Load Balancer in front of the instance and run two of
+5. **Change `instance_type`** in `terraform.tfvars`, then run the infra pipeline with
+   action **`plan`** and read the output carefully — notice Terraform tells you it will
+   *replace* the instance, not modify it. Nothing has happened to AWS yet: that's the
+   whole value of a plan.
+6. **Destroy and rebuild the whole environment** from the Actions tab (`destroy`, then
+   `apply`, then re-run CI/CD). Time it. This is what "infrastructure as code" actually
+   buys you — and note the pipelines still authenticate afterwards, because the roles
+   live in the separate bootstrap stack.
+7. **Put the automation back:** add `on: push: branches: [main]` to
+   [cicd.yml](.github/workflows/cicd.yml) so deploys happen on every merge, like a real
+   project. Then add `pull_request` to [infra.yml](.github/workflows/infra.yml) so infra
+   changes get planned on the PR.
+8. **Harder:** put an Application Load Balancer in front of the instance and run two of
    them. This is where the `/health` endpoint stops being decorative.
 
 Happy shipping. 🚀
