@@ -1,0 +1,12 @@
+# Partial backend config for the BOOTSTRAP state.
+# Same bucket and lock table as the workload stack, but a DIFFERENT key — that
+# separate key is what keeps the CI roles alive across a workload destroy.
+#
+#   cp backend.hcl.example backend.hcl   # then set your bucket name
+#   terraform init -backend-config=backend.hcl
+
+bucket         = "sd-devops-workshop-tfstate"
+key            = "devops-workshop/bootstrap.tfstate"
+region         = "eu-west-1"
+dynamodb_table = "devops-workshop-tf-locks"
+encrypt        = true

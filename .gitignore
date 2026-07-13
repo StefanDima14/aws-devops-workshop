@@ -1,12 +1,13 @@
 # Terraform (commit .terraform.lock.hcl — it pins provider versions)
-terraform/.terraform/
+# Globs, not terraform/-prefixed paths, so they also cover terraform/bootstrap/.
+**/.terraform/
 *.tfstate
 *.tfstate.*
-terraform/tfplan
+**/tfplan
 plan.txt
 # Local config (never commit secrets / real values)
-terraform/terraform.tfvars
-terraform/backend.hcl
+**/terraform.tfvars
+**/backend.hcl
 *.pem
 
 # Video assets (large binaries live in S3, not git)

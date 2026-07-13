@@ -1,0 +1,14 @@
+# Copy to terraform.tfvars and fill in your values.
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# These MUST match the workload stack's values (../terraform.tfvars): resource
+# names are derived from project_name + environment, and the pipeline policies
+# here are scoped to those names.
+
+aws_region   = "eu-west-1"
+project_name = "devops-workshop"
+environment  = "dev"
+owner        = "stefan"
+
+# REQUIRED: your GitHub repo in "owner/name" form (used for OIDC trust).
+github_repo = "StefanDima14/aws-devops-workshop"

@@ -13,8 +13,8 @@ my_ip_cidr = "203.0.113.5/32"
 # Optional: name of an existing EC2 key pair for SSH. Leave "" to use SSM only.
 key_pair_name = ""
 
-# REQUIRED: your GitHub repo in "owner/name" form (used for OIDC trust).
-github_repo = "your-user/aws-devops-workshop"
+# NOTE: github_repo is NOT set here — the OIDC trust lives in the bootstrap
+# stack. See terraform/bootstrap/terraform.tfvars.example.
 
 # --- Video (stored in a private S3 bucket, served via presigned URL) ---------
 # Object key the app reads from the bucket.
