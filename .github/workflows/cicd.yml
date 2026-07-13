@@ -1,13 +1,9 @@
 name: CI/CD Pipeline
 
-# When does this run? On every push to main, on PRs (tests only), and manually
-# from the Actions tab (full test → build → deploy).
+# Manual only: started from the Actions tab, so we can demo the full
+# test → build → scan → deploy chain live instead of waiting for a push.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
 
 # Prevent overlapping deploys of the same branch.
 concurrency:
@@ -54,15 +50,11 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # STAGE 2: BUILD & SCAN — build the Docker image, scan it with Trivy.
-  # Runs on push to main and on manual runs (not on PRs).
   # ---------------------------------------------------------------------------
   build-and-scan:
     name: Build, Scan & Push Image
     runs-on: ubuntu-latest
     needs: test
-    if: |
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      github.event_name == 'workflow_dispatch'
     outputs:
       image_tag: ${{ steps.meta.outputs.image_tag }}
     steps:
@@ -115,9 +107,6 @@ jobs:
     name: Deploy to EC2
     runs-on: ubuntu-latest
     needs: build-and-scan
-    if: |
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      github.event_name == 'workflow_dispatch'
     steps:
       - name: Configure AWS credentials (via OIDC)
         uses: aws-actions/configure-aws-credentials@v4
