@@ -104,6 +104,9 @@ k8s-up: k8s-preflight ## Deploy the whole stack to OrbStack's Kubernetes
 	$(KCTL) -n $(K8S_NS) create configmap grafana-dashboard-provider \
 	  --from-file=monitoring/grafana/provisioning/dashboards/ \
 	  --dry-run=client -o yaml | $(KCTL) apply -f -
+	$(KCTL) -n $(K8S_NS) create configmap grafana-alerting \
+	  --from-file=monitoring/grafana/provisioning/alerting/ \
+	  --dry-run=client -o yaml | $(KCTL) apply -f -
 	$(KCTL) -n $(K8S_NS) create configmap grafana-dashboards \
 	  --from-file=monitoring/grafana/dashboards/ \
 	  --dry-run=client -o yaml | $(KCTL) apply -f -

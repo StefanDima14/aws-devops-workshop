@@ -1,0 +1,254 @@
+# Grafana alerting provisioning (config as code).
+#
+# Four Grafana-managed alert rules, one per Ops Console button. Each one trips
+# once you've pressed its button ~15 times, so the workshop can *demonstrate* an
+# alert firing on demand: open the Ops Console, click a button 15 times, and
+# watch the rule flip to "Firing" in Grafana ▸ Alerting ▸ Alert rules (and an
+# annotation appear on the matching dashboard panel).
+#
+# How "15 presses" becomes a threshold — each button moves a metric by a fixed
+# step (see app/loadgen.py), so 15 presses is a concrete number:
+#
+#   🧠 Memory   15 × 64 MB  = 960 MB   → fire above 14 blocks (896 MB = 939524096 B)
+#   🔥 CPU      15 workers            → fire above 14 workers
+#   💾 Disk     15 × 128 MB = 1920 MB  → fire above 14 files (1792 MB = 1879048192 B)
+#   🌐 Network  15 workers            → fire above 14 workers
+#
+# The evaluators use "> 14" (not ">= 15") so the *15th* press is what trips the
+# alert — clean to show live. Rules evaluate every 30s with `for: 0s`, so they
+# fire on the first evaluation after you cross the line rather than making the
+# room wait. Note the CPU/Network ceilings are 16 workers (MAX_*_WORKERS), so 15
+# is reachable but near the cap — press until the number stops climbing.
+#
+# Runtime caveat — Docker vs Kubernetes:
+#   * `make docker-up` (Compose) runs the app with NO resource limits, so all
+#     four alerts reach their 15-press threshold and fire. Best runtime for the
+#     "watch it turn red" demo.
+#   * `make k8s-up` (Kubernetes) caps the app pod at 512Mi (see k8s/10-app.yaml).
+#     The 15-press MEMORY target is 960 MB, so the gunicorn worker is OOM-recycled
+#     (~8 blocks) *before* the memory alert can fire — the resource limit doing
+#     exactly its job (this is the same lesson as `make k8s-limits`). CPU, disk
+#     and network are not memory-bounded, so those three still fire in k8s.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: Load generator thresholds
+    folder: Workshop Alerts
+    interval: 30s
+    rules:
+      # --- 🧠 Memory ----------------------------------------------------------
+      - uid: loadgen-memory-15
+        title: Memory load high (15+ presses)
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+          team: workshop
+          signal: memory
+        annotations:
+          summary: "Deliberate memory load has crossed ~15 presses (>896 MB held)"
+          description: >
+            app_memory_allocated_bytes is above 896 MB, i.e. the 🧠 Allocate
+            button has been pressed 15+ times (15 × 64 MB = 960 MB). This is the
+            demo threshold — free memory from the Ops Console to clear it.
+          __dashboardUid__: workshop-observability
+          __panelId__: "6"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: app_memory_allocated_bytes
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: C
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params: [939524096]   # 14 × 64 MB — the 15th press trips it
+                  operator:
+                    type: and
+                  query:
+                    params: [C]
+                  reducer:
+                    type: last
+                    params: []
+
+      # --- 🔥 CPU -------------------------------------------------------------
+      - uid: loadgen-cpu-15
+        title: CPU load high (15+ presses)
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+          team: workshop
+          signal: cpu
+        annotations:
+          summary: "Deliberate CPU load has crossed ~15 presses (>14 workers)"
+          description: >
+            app_cpu_workers is above 14, i.e. the 🔥 CPU button has been pressed
+            15+ times (one worker per press). The ceiling is 16 workers, so this
+            is the demo threshold — remove workers from the Ops Console to clear it.
+          __dashboardUid__: workshop-observability
+          __panelId__: "7"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: app_cpu_workers
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: C
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params: [14]          # 14 workers — the 15th press trips it
+                  operator:
+                    type: and
+                  query:
+                    params: [C]
+                  reducer:
+                    type: last
+                    params: []
+
+      # --- 💾 Disk ------------------------------------------------------------
+      - uid: loadgen-disk-15
+        title: Disk load high (15+ presses)
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+          team: workshop
+          signal: disk
+        annotations:
+          summary: "Deliberate disk load has crossed ~15 presses (>1792 MB written)"
+          description: >
+            app_disk_bytes is above 1792 MB, i.e. the 💾 Write button has been
+            pressed 15+ times (15 × 128 MB = 1920 MB). This is the demo threshold —
+            use the 🧹 Cleanup button on the Ops Console to clear it.
+          __dashboardUid__: workshop-observability
+          __panelId__: "8"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: app_disk_bytes
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: C
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params: [1879048192]  # 14 × 128 MB — the 15th press trips it
+                  operator:
+                    type: and
+                  query:
+                    params: [C]
+                  reducer:
+                    type: last
+                    params: []
+
+      # --- 🌐 Network ---------------------------------------------------------
+      - uid: loadgen-network-15
+        title: Network load high (15+ presses)
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+          team: workshop
+          signal: network
+        annotations:
+          summary: "Deliberate network load has crossed ~15 presses (>14 workers)"
+          description: >
+            app_network_workers is above 14, i.e. the 🌐 Network button has been
+            pressed 15+ times (one worker per press). The ceiling is 16 workers, so
+            this is the demo threshold — remove workers from the Ops Console to clear it.
+          __dashboardUid__: workshop-observability
+          __panelId__: "9"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: app_network_workers
+              instant: true
+              range: false
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: C
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - type: query
+                  evaluator:
+                    type: gt
+                    params: [14]          # 14 workers — the 15th press trips it
+                  operator:
+                    type: and
+                  query:
+                    params: [C]
+                  reducer:
+                    type: last
+                    params: []
