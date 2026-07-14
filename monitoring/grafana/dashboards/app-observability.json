@@ -1,0 +1,188 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "time": { "from": "now-15m", "to": "now" },
+  "refresh": "5s",
+  "timezone": "browser",
+  "title": "App Observability — Workshop",
+  "uid": "workshop-observability",
+  "schemaVersion": 39,
+  "version": 1,
+  "tags": ["workshop", "observability"],
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "type": "row",
+      "title": "🎛  Ops Console — what the buttons do",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "collapsed": false
+    },
+    {
+      "type": "stat",
+      "title": "Memory held",
+      "id": 2,
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes", "color": { "mode": "fixed", "fixedColor": "purple" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
+      "targets": [ { "refId": "A", "expr": "app_memory_allocated_bytes" } ]
+    },
+    {
+      "type": "stat",
+      "title": "CPU workers",
+      "id": 3,
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "red" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
+      "targets": [ { "refId": "A", "expr": "app_cpu_workers" } ]
+    },
+    {
+      "type": "stat",
+      "title": "Disk used",
+      "id": 4,
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes", "color": { "mode": "fixed", "fixedColor": "blue" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
+      "targets": [ { "refId": "A", "expr": "app_disk_bytes" } ]
+    },
+    {
+      "type": "stat",
+      "title": "Network workers",
+      "id": 5,
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "green" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "area" },
+      "targets": [ { "refId": "A", "expr": "app_network_workers" } ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Memory allocated by the app (button: 🧠)",
+      "id": 6,
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2 } }, "overrides": [] },
+      "targets": [ { "refId": "A", "expr": "app_memory_allocated_bytes", "legendFormat": "allocated" } ]
+    },
+    {
+      "type": "timeseries",
+      "title": "CPU worker processes (button: 🔥)",
+      "id": 7,
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2, "stepAfter": true } }, "overrides": [] },
+      "targets": [ { "refId": "A", "expr": "app_cpu_workers", "legendFormat": "workers" } ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Bytes on disk (button: 💾)",
+      "id": 8,
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2 } }, "overrides": [] },
+      "targets": [ { "refId": "A", "expr": "app_disk_bytes", "legendFormat": "on disk" } ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Network throughput generated (button: 🌐)",
+      "id": 9,
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "Bps", "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 2 } }, "overrides": [] },
+      "targets": [ { "refId": "A", "expr": "rate(app_network_bytes_total[1m])", "legendFormat": "bytes/sec pulled" } ]
+    },
+    {
+      "type": "row",
+      "title": "📦  Container reality — cAdvisor (does the OS agree?)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 20 },
+      "id": 10,
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "Container memory usage (docker & k8s)",
+      "description": "Same container, two runtimes: cAdvisor labels it name=\"workshop-app\" under Docker, but container_label_io_kubernetes_container_name under Kubernetes. Whichever runtime is up populates its line.",
+      "id": 11,
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 21 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2 } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "container_memory_usage_bytes{name=\"workshop-app\"}", "legendFormat": "RSS (docker)" },
+        { "refId": "B", "expr": "container_memory_usage_bytes{container_label_io_kubernetes_container_name=\"workshop-app\"}", "legendFormat": "RSS (k8s)" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Container CPU cores (docker & k8s)",
+      "description": "Docker query uses name=\"workshop-app\"; Kubernetes query uses container_label_io_kubernetes_container_name.",
+      "id": 12,
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 21 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 20, "lineWidth": 2 } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "rate(container_cpu_usage_seconds_total{name=\"workshop-app\"}[1m])", "legendFormat": "cores (docker)" },
+        { "refId": "B", "expr": "rate(container_cpu_usage_seconds_total{container_label_io_kubernetes_container_name=\"workshop-app\"}[1m])", "legendFormat": "cores (k8s)" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Container network I/O (docker & k8s)",
+      "description": "Under Kubernetes, networking is per-POD (the pause container), so the k8s series is keyed on the pod label, not the container.",
+      "id": 13,
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 21 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "Bps", "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 2 } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "rate(container_network_receive_bytes_total{name=\"workshop-app\"}[1m])", "legendFormat": "rx (docker)" },
+        { "refId": "B", "expr": "rate(container_network_transmit_bytes_total{name=\"workshop-app\"}[1m])", "legendFormat": "tx (docker)" },
+        { "refId": "C", "expr": "sum(rate(container_network_receive_bytes_total{container_label_io_kubernetes_pod_name=~\"app-.*\"}[1m]))", "legendFormat": "rx (k8s pod)" },
+        { "refId": "D", "expr": "sum(rate(container_network_transmit_bytes_total{container_label_io_kubernetes_pod_name=~\"app-.*\"}[1m]))", "legendFormat": "tx (k8s pod)" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "🌐  HTTP traffic",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 29 },
+      "id": 14,
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "Request rate by endpoint",
+      "id": 15,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 30 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 2 } }, "overrides": [] },
+      "targets": [ { "refId": "A", "expr": "sum by (endpoint) (rate(app_http_requests_total[1m]))", "legendFormat": "{{endpoint}}" } ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Request latency p95",
+      "id": 16,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 30 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 2 } }, "overrides": [] },
+      "targets": [ { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, endpoint) (rate(app_http_request_duration_seconds_bucket[5m])))", "legendFormat": "p95 {{endpoint}}" } ]
+    },
+    {
+      "type": "row",
+      "title": "📜  Logs (Loki)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 38 },
+      "id": 17,
+      "collapsed": false
+    },
+    {
+      "type": "logs",
+      "title": "App logs — filter: {container=\"workshop-app\"}",
+      "id": 18,
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 39 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true },
+      "targets": [ { "refId": "A", "expr": "{container=\"workshop-app\"}" } ]
+    }
+  ]
+}

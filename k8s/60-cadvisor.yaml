@@ -1,0 +1,74 @@
+# =============================================================================
+# cAdvisor — per-container CPU/memory/network/disk, straight from the node.
+#
+# A DaemonSet: one cAdvisor pod on every node, because resource usage is a
+# per-node fact. It scrapes the container runtime through host mounts.
+#
+# Heads-up on labels: standalone cAdvisor labels containers differently under
+# Kubernetes than under Docker Compose. In Compose the app container is
+# name="workshop-app"; under containerd it's a long id, with the friendly name in
+# container_label_io_kubernetes_container_name. That's why the dashboard's
+# cAdvisor panels carry TWO queries (one per runtime) — a nice illustration that
+# the same workload is labelled differently depending on where it runs.
+# =============================================================================
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: cadvisor
+  namespace: workshop
+  labels:
+    app: cadvisor
+spec:
+  selector:
+    matchLabels:
+      app: cadvisor
+  template:
+    metadata:
+      labels:
+        app: cadvisor
+    spec:
+      # cAdvisor doesn't call the Kubernetes API, so don't auto-mount a
+      # ServiceAccount token. It also avoids a clash: we mount the host's
+      # read-only /var/run, and the kubelet can't create the token's mountpoint
+      # underneath it (that mount failure is what crash-loops the pod otherwise).
+      automountServiceAccountToken: false
+      containers:
+        - name: cadvisor
+          image: gcr.io/cadvisor/cadvisor:v0.49.1
+          ports:
+            - containerPort: 8080
+          # cAdvisor needs broad read access to the host to see every container.
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - { name: rootfs, mountPath: /rootfs, readOnly: true }
+            - { name: var-run, mountPath: /var/run, readOnly: true }
+            - { name: sys, mountPath: /sys, readOnly: true }
+            - { name: containerd, mountPath: /var/lib/containerd, readOnly: true }
+            - { name: docker, mountPath: /var/lib/docker, readOnly: true }
+      volumes:
+        - { name: rootfs, hostPath: { path: / } }
+        - { name: var-run, hostPath: { path: /var/run } }
+        - { name: sys, hostPath: { path: /sys } }
+        # DirectoryOrCreate: kind nodes use containerd, so /var/lib/docker may
+        # not exist — create an empty dir rather than fail the pod.
+        - { name: containerd, hostPath: { path: /var/lib/containerd, type: DirectoryOrCreate } }
+        - { name: docker, hostPath: { path: /var/lib/docker, type: DirectoryOrCreate } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cadvisor
+  namespace: workshop
+  labels:
+    app: cadvisor
+spec:
+  # ClusterIP (in-cluster only): Prometheus scrapes it as "cadvisor:8080".
+  # No need to expose it on the host — its data shows up in the Grafana dashboard.
+  selector:
+    app: cadvisor
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

@@ -1,0 +1,112 @@
+# =============================================================================
+# The application: ConfigMap + Deployment + Service.
+#
+# This is the same image the Docker Compose stack runs. What changes is HOW it
+# runs — wrapped in a Pod, managed by a Deployment, fronted by a Service.
+# =============================================================================
+---
+# --- Config -------------------------------------------------------------------
+# In Compose these were `environment:` keys. In Kubernetes, config is a proper
+# API object you can inspect (`kubectl get configmap app-config -o yaml`), share
+# and version independently of the image.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: workshop
+data:
+  APP_VERSION: "k8s-demo"
+  LOG_LEVEL: "INFO"
+  # Network-load workers pull from the app itself over loopback (same pod).
+  APP_SELF_URL: "http://127.0.0.1:8080"
+  # The "disk load" button writes here — an emptyDir volume, mounted below.
+  LOAD_DATA_DIR: "/data/loadgen"
+---
+# --- Deployment ---------------------------------------------------------------
+# A Deployment declares DESIRED STATE ("run 1 copy of this pod") and a controller
+# makes reality match — restarting crashed pods, rolling out new versions, etc.
+# This is the self-healing you demo with `make k8s-heal`.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+  namespace: workshop
+  labels:
+    app: workshop-app
+spec:
+  replicas: 1  # keep at 1 so the in-memory Ops Console stays consistent (see k8s-scale)
+  selector:
+    matchLabels:
+      app: workshop-app
+  template:
+    metadata:
+      labels:
+        app: workshop-app
+    spec:
+      # fsGroup makes the emptyDir volume group-writable so the non-root
+      # 'appuser' (uid/gid 1000 from the Dockerfile) can write disk-load files.
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: workshop-app   # the container name → becomes the Loki `container` label
+          image: workshop-app:local
+          imagePullPolicy: IfNotPresent  # use the image we side-loaded into kind
+          # Single worker + threads so all load/metrics state lives in one process.
+          command: ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "app:app"]
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: app-config
+          volumeMounts:
+            - name: loadgen-data
+              mountPath: /data
+          # Resource governance — Compose had NONE of this. `requests` is what the
+          # scheduler guarantees; `limits` is the hard ceiling. Cross the memory
+          # limit with the 🧠 button and Kubernetes OOM-kills + restarts the pod
+          # (see `make k8s-limits`). CPU over the limit is throttled, not killed.
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+          # Probes are Kubernetes' version of the Dockerfile HEALTHCHECK, but
+          # richer: readiness gates traffic, liveness restarts a wedged pod.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: loadgen-data
+          emptyDir: {}  # scratch space that lives and dies with the pod
+---
+# --- Service ------------------------------------------------------------------
+# A Service gives the pods a stable identity: the DNS name "app" and a virtual IP
+# that load-balances across every matching pod. Prometheus scrapes "app:8080"
+# through this. type: LoadBalancer asks the platform for an external address —
+# OrbStack fulfils that by exposing it on your Mac's localhost:8080.
+apiVersion: v1
+kind: Service
+metadata:
+  name: app
+  namespace: workshop
+  labels:
+    app: workshop-app
+spec:
+  type: LoadBalancer
+  selector:
+    app: workshop-app
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

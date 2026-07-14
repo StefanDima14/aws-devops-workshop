@@ -1,0 +1,69 @@
+# =============================================================================
+# Prometheus — scrapes /metrics and stores the time series.
+#
+# The config (prometheus.yml) is the SAME file the Compose stack uses; the
+# Makefile turns it into the `prometheus-config` ConfigMap. Its static targets
+# (app:8080, cadvisor:8080, node-exporter:9100) resolve through cluster DNS to
+# the Services we define here and in the sibling files.
+#
+# Teaching note: in a real cluster you'd let Prometheus DISCOVER targets via the
+# Kubernetes API (kubernetes_sd_configs) instead of listing them. We keep the
+# static list so this file is identical to the Docker one — one fewer moving part.
+# =============================================================================
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: workshop
+  labels:
+    app: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      # prom/prometheus runs as uid 65534 ("nobody"); fsGroup lets it write the
+      # emptyDir TSDB directory.
+      securityContext:
+        fsGroup: 65534
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.53.0
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.retention.time=6h"
+          ports:
+            - containerPort: 9090
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: workshop
+  labels:
+    app: prometheus
+spec:
+  type: LoadBalancer  # OrbStack exposes this on localhost:9090
+  selector:
+    app: prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: 9090

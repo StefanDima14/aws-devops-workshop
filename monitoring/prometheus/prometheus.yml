@@ -1,0 +1,30 @@
+# Prometheus configuration.
+#
+# Prometheus works by *scraping* — every `scrape_interval` it does an HTTP GET on
+# each target's /metrics and stores whatever numbers it finds. Below we point it
+# at four targets: our app, cAdvisor (containers), node-exporter (host), and
+# Prometheus itself. Targets are addressed by their docker-compose service name.
+global:
+  scrape_interval: 5s      # scrape often so the graphs feel live in the demo
+  evaluation_interval: 5s
+
+scrape_configs:
+  # The app's custom metrics: load-generator gauges + per-request counters.
+  - job_name: "app"
+    static_configs:
+      - targets: ["app:8080"]
+
+  # Per-container CPU / memory / network / filesystem.
+  - job_name: "cadvisor"
+    static_configs:
+      - targets: ["cadvisor:8080"]
+
+  # Host-level metrics (the machine under Docker).
+  - job_name: "node"
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  # Prometheus scraping itself — handy for a "is monitoring healthy?" panel.
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]

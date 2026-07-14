@@ -1,0 +1,12 @@
+# A Namespace is a virtual cluster inside the cluster: a way to group and isolate
+# related objects. Everything in this workshop lives in "workshop", so you can
+# see it all with `kubectl -n workshop get all` and delete it in one shot.
+#
+# Docker Compose had nothing quite like this — a compose "project" is the nearest
+# cousin, but namespaces are a first-class, cluster-wide isolation boundary.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: workshop
+  labels:
+    app.kubernetes.io/part-of: aws-devops-workshop

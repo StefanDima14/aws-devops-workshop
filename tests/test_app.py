@@ -61,3 +61,54 @@ def test_video_url_falls_back_on_presign_error(monkeypatch):
 
     monkeypatch.setattr(app_module, "_get_s3_client", boom)
     assert app_module.get_video_url() == app_module.FALLBACK_VIDEO_URL
+
+
+# --- Monitoring step ---------------------------------------------------------
+def test_panel_page_loads(client):
+    """The Ops Console page renders with its buttons."""
+    resp = client.get("/panel")
+    assert resp.status_code == 200
+    assert b"Ops Console" in resp.data
+
+
+def test_metrics_endpoint_exposes_prometheus(client):
+    """/metrics serves Prometheus text including our custom series."""
+    resp = client.get("/metrics")
+    assert resp.status_code == 200
+    # Both a default process metric and one of our load-generator gauges.
+    assert b"app_memory_allocated_bytes" in resp.data
+    assert b"app_cpu_workers" in resp.data
+
+
+def test_load_state_reports_gauges(client):
+    """The console polls /api/load/state; it must return the known keys."""
+    resp = client.get("/api/load/state")
+    assert resp.status_code == 200
+    state = resp.get_json()["state"]
+    for key in ("memory_mb", "cpu_workers", "disk_mb", "network_workers"):
+        assert key in state
+
+
+def test_unknown_load_action_is_rejected(client):
+    """An unknown resource/action pair is a 400, not a 500."""
+    resp = client.post("/api/load/teleporter/increase")
+    assert resp.status_code == 400
+
+
+def test_memory_button_actually_allocates(client):
+    """Increasing then decreasing memory moves the gauge and nets to zero."""
+    before = client.get("/api/load/state").get_json()["state"]["memory_blocks"]
+    up = client.post("/api/load/memory/increase").get_json()["state"]
+    assert up["memory_blocks"] == before + 1
+    down = client.post("/api/load/memory/decrease").get_json()["state"]
+    assert down["memory_blocks"] == before
+
+
+def test_logs_endpoint_returns_recent_lines(client):
+    """Every action logs; the in-app viewer can read those lines back."""
+    client.post("/api/load/memory/increase")
+    client.post("/api/load/memory/decrease")
+    resp = client.get("/api/logs")
+    assert resp.status_code == 200
+    logs = resp.get_json()["logs"]
+    assert any("Ops Console action" in entry["message"] for entry in logs)

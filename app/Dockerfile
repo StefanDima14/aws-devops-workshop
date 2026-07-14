@@ -18,8 +18,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Security best practice: run as a non-root user, never as root.
+# /data is where the "disk load" button writes files; create it up front and
+# hand it to appuser so a mounted named volume inherits writable ownership.
 RUN useradd --create-home --shell /bin/bash appuser \
-    && chown -R appuser:appuser /app
+    && mkdir -p /data/loadgen \
+    && chown -R appuser:appuser /app /data
 USER appuser
 
 EXPOSE 8080

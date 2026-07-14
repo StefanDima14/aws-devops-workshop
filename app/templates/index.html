@@ -52,6 +52,8 @@
     <footer>
       <span class="badge">version: {{ version }}</span>
       <span class="badge">host: {{ hostname }}</span>
+      <!-- Link to the monitoring step's control panel. -->
+      <a class="badge badge-link" href="{{ url_for('panel') }}">⚙ Ops Console →</a>
     </footer>
   </main>
 </body>

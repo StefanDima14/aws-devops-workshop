@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ops Console — AWS DevOps Workshop</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='panel.css') }}" />
+</head>
+<body>
+  <main class="container console">
+    <header>
+      <h1>⚙ Ops Console</h1>
+      <p class="subtitle">Generate real load &middot; watch it in Prometheus &amp; Grafana</p>
+      <p class="hint">
+        Every button below makes this process <em>actually</em> use more (or less)
+        of a resource. Open Grafana alongside this page and watch the graphs move.
+      </p>
+    </header>
+
+    <!-- One card per resource. data-resource drives the JS that wires the buttons. -->
+    <section class="grid">
+      <!-- MEMORY -->
+      <article class="card" data-resource="memory">
+        <div class="card-head">
+          <span class="icon">🧠</span>
+          <h2>Memory</h2>
+        </div>
+        <p class="metric"><span class="value" data-metric="memory_mb">0</span> MB held</p>
+        <p class="sub"><span data-metric="memory_blocks">0</span> block(s) of <span data-metric="mem_block_mb">?</span> MB</p>
+        <div class="btns">
+          <button class="btn up" data-action="increase">+ Allocate</button>
+          <button class="btn down" data-action="decrease">− Free</button>
+        </div>
+      </article>
+
+      <!-- CPU -->
+      <article class="card" data-resource="cpu">
+        <div class="card-head">
+          <span class="icon">🔥</span>
+          <h2>CPU</h2>
+        </div>
+        <p class="metric"><span class="value" data-metric="cpu_workers">0</span> worker(s)</p>
+        <p class="sub">each ≈ one busy core</p>
+        <div class="btns">
+          <button class="btn up" data-action="increase">+ Add core</button>
+          <button class="btn down" data-action="decrease">− Remove core</button>
+        </div>
+      </article>
+
+      <!-- DISK -->
+      <article class="card" data-resource="disk">
+        <div class="card-head">
+          <span class="icon">💾</span>
+          <h2>Disk</h2>
+        </div>
+        <p class="metric"><span class="value" data-metric="disk_mb">0</span> MB on disk</p>
+        <p class="sub"><span data-metric="disk_block_mb">?</span> MB per file</p>
+        <div class="btns">
+          <button class="btn up" data-action="increase">+ Write file</button>
+          <button class="btn danger" data-action="cleanup">🗑 Cleanup</button>
+        </div>
+      </article>
+
+      <!-- NETWORK -->
+      <article class="card" data-resource="network">
+        <div class="card-head">
+          <span class="icon">🌐</span>
+          <h2>Network</h2>
+        </div>
+        <p class="metric"><span class="value" data-metric="network_workers">0</span> worker(s)</p>
+        <p class="sub">each streams bytes continuously</p>
+        <div class="btns">
+          <button class="btn up" data-action="increase">+ Add traffic</button>
+          <button class="btn down" data-action="decrease">− Less traffic</button>
+        </div>
+      </article>
+    </section>
+
+    <!-- LOG VIEWER -->
+    <section class="logs">
+      <div class="logs-head">
+        <h2>📜 Live logs</h2>
+        <div class="logs-controls">
+          <label><input type="checkbox" id="autoscroll" checked /> auto-scroll</label>
+          <button class="btn small" id="clear-view">clear view</button>
+        </div>
+      </div>
+      <!-- The same lines also go to stdout → Promtail → Loki → Grafana. -->
+      <pre id="log-output" class="log-output"></pre>
+    </section>
+
+    <footer>
+      <span class="badge">version: {{ version }}</span>
+      <span class="badge">host: {{ hostname }}</span>
+      <a class="badge badge-link" href="{{ url_for('index') }}">← Back to app</a>
+      <a class="badge badge-link" href="/metrics" target="_blank">/metrics</a>
+    </footer>
+  </main>
+
+  <script>
+    // --- Wiring the buttons --------------------------------------------------
+    // Each button POSTs /api/load/<resource>/<action> and re-renders the gauges
+    // from the JSON the server returns. No frameworks — plain fetch().
+    async function act(resource, action) {
+      const res = await fetch(`/api/load/${resource}/${action}`, { method: "POST" });
+      const data = await res.json();
+      if (data.state) render(data.state);
+    }
+
+    document.querySelectorAll(".card").forEach((card) => {
+      const resource = card.dataset.resource;
+      card.querySelectorAll("button[data-action]").forEach((btn) => {
+        btn.addEventListener("click", () => act(resource, btn.dataset.action));
+      });
+    });
+
+    // --- Rendering the live gauges ------------------------------------------
+    function render(state) {
+      for (const [key, val] of Object.entries(state)) {
+        document.querySelectorAll(`[data-metric="${key}"]`).forEach((el) => {
+          el.textContent = val;
+        });
+      }
+    }
+
+    async function pollState() {
+      try {
+        const res = await fetch("/api/load/state");
+        const data = await res.json();
+        if (data.state) render(data.state);
+      } catch (e) {
+        /* transient; the next tick will retry */
+      }
+    }
+
+    // --- Log tail ------------------------------------------------------------
+    const logOutput = document.getElementById("log-output");
+    const autoscroll = document.getElementById("autoscroll");
+    document.getElementById("clear-view").addEventListener("click", () => {
+      logOutput.textContent = "";
+    });
+
+    function levelClass(level) {
+      if (level === "ERROR" || level === "CRITICAL") return "lvl-error";
+      if (level === "WARNING") return "lvl-warn";
+      return "lvl-info";
+    }
+
+    async function pollLogs() {
+      try {
+        const res = await fetch("/api/logs?limit=200");
+        const data = await res.json();
+        logOutput.innerHTML = data.logs
+          .map(
+            (l) =>
+              `<span class="${levelClass(l.level)}">` +
+              `${l.time} ${l.level.padEnd(7)} [${l.logger}] ${escapeHtml(l.message)}</span>`
+          )
+          .join("\n");
+        if (autoscroll.checked) logOutput.scrollTop = logOutput.scrollHeight;
+      } catch (e) {
+        /* transient */
+      }
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+    }
+
+    // Kick off the polling loops.
+    pollState();
+    pollLogs();
+    setInterval(pollState, 1000);
+    setInterval(pollLogs, 1000);
+  </script>
+</body>
+</html>

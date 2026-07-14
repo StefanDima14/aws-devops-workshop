@@ -1,0 +1,60 @@
+# =============================================================================
+# Loki — stores logs. Same config file as the Docker stack (delivered via the
+# `loki-config` ConfigMap). Promtail (next file) ships pod logs here, and the
+# Grafana "Logs" panel reads them back.
+# =============================================================================
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loki
+  namespace: workshop
+  labels:
+    app: loki
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: loki
+  template:
+    metadata:
+      labels:
+        app: loki
+    spec:
+      # grafana/loki runs as uid 10001; fsGroup lets it write /loki.
+      securityContext:
+        fsGroup: 10001
+      containers:
+        - name: loki
+          image: grafana/loki:3.0.0
+          args: ["-config.file=/etc/loki/loki-config.yml"]
+          ports:
+            - containerPort: 3100
+          volumeMounts:
+            - name: config
+              mountPath: /etc/loki
+            - name: data
+              mountPath: /loki
+      volumes:
+        - name: config
+          configMap:
+            name: loki-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+  namespace: workshop
+  labels:
+    app: loki
+spec:
+  # ClusterIP (the default): reachable only inside the cluster. Promtail and
+  # Grafana talk to it by name; there's no reason to expose it on the host.
+  selector:
+    app: loki
+  ports:
+    - name: http
+      port: 3100
+      targetPort: 3100

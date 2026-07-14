@@ -44,6 +44,8 @@ By the end you will have:
 12. [Clean up — do not skip this](#12-clean-up--do-not-skip-this)
 13. [Troubleshooting](#13-troubleshooting)
 14. [Exercises — make it your own](#14-exercises--make-it-your-own)
+15. [Monitoring & observability — see what your app is doing](#15-monitoring--observability--see-what-your-app-is-doing)
+    - [15.1 The same app on Kubernetes — Docker vs a real orchestrator](#151-the-same-app-on-kubernetes--docker-vs-a-real-orchestrator)
 
 ---
 
@@ -761,5 +763,198 @@ curl localhost/health             # does it answer?
    changes get planned on the PR.
 8. **Harder:** put an Application Load Balancer in front of the instance and run two of
    them. This is where the `/health` endpoint stops being decorative.
+
+---
+
+## 15. Monitoring & observability — see what your app is doing
+
+Shipping code is half the job. The other half is **knowing what it does once it's
+running** — how much memory it eats, whether it's on fire, what it's logging. That's
+*observability*, and it rests on three pillars:
+
+| Pillar | Question it answers | Tool here |
+|---|---|---|
+| **Metrics** | "How much? How fast? How many?" (numbers over time) | Prometheus |
+| **Logs** | "What exactly happened, and when?" (lines of text) | Loki + Promtail |
+| **Dashboards** | "Show me all of the above at a glance" | Grafana |
+
+To make this tangible, the app now ships an **Ops Console** with buttons that
+*actually* consume resources — nothing faked. You press a button, the app really
+allocates the RAM (or burns the CPU, or writes the file, or pushes the bytes), and you
+watch the graph climb in Grafana seconds later.
+
+### Run the whole thing with one command
+
+```bash
+make docker-up
+```
+
+That builds the app and starts seven containers wired together (see
+[docker-compose.yml](docker-compose.yml)). When it's done it prints every URL:
+
+| URL | What it is |
+|---|---|
+| http://localhost:8080 | the app (the video page) |
+| http://localhost:8080/panel | the **Ops Console** — the buttons |
+| http://localhost:8080/metrics | raw Prometheus metrics (what the app exposes) |
+| http://localhost:3000 | **Grafana** — open the *"App Observability — Workshop"* dashboard |
+| http://localhost:9090 | Prometheus (query the raw time series) |
+| http://localhost:8081 | cAdvisor (per-container resource usage) |
+
+Grafana opens straight to the dashboard — no login, the datasources and the dashboard
+are **provisioned from files** ([monitoring/grafana/](monitoring/grafana/)), so there's
+nothing to click to set up.
+
+Run `make` on its own to see every target, grouped into **Docker** and **Kubernetes**
+sections plus shared `stress-*` helpers.
+
+> **Two runtimes, one app.** This same stack also runs on **Kubernetes** with
+> `make k8s-up` — same image, same dashboard, same URLs. That parallel is the whole
+> teaching point of [§15.1](#151-the-same-app-on-kubernetes--docker-vs-a-real-orchestrator).
+> The steps below use the Docker path; do them once here, then repeat them on
+> Kubernetes and watch what changes (and what doesn't).
+
+### The demo loop
+
+1. Open **Grafana** (http://localhost:3000) and the **Ops Console**
+   (http://localhost:8080/panel) side by side.
+2. On the console, press **🧠 Allocate** a few times. Within a few seconds the
+   *"Memory allocated"* panel climbs — and so does the cAdvisor *"Container memory
+   usage"* panel next to it. The app's self-reported number and what the OS actually
+   sees agree. That's the point.
+3. Press **🔥 Add core**. The *"CPU worker processes"* graph steps up, and *"Container
+   CPU (cores)"* follows as real hashing work saturates a core.
+4. Press **💾 Write file**, watch *"Bytes on disk"* rise, then hit **🗑 Cleanup** and
+   watch it drop back to zero.
+5. Press **🌐 Add traffic** and watch *"Network throughput generated"* jump.
+6. Scroll to the **Logs** panel at the bottom — every button press emitted a log line,
+   and it's here (via Loki), as well as in the live viewer on the console page itself.
+
+Prefer the terminal? `make stress-mem`, `make stress-cpu`, `make stress-disk`,
+`make stress-net`, `make stress-clean` drive the same API the buttons use.
+
+### How it fits together
+
+```mermaid
+flowchart LR
+    buttons["Ops Console<br/>buttons"] -->|POST /api/load/...| app["Flask app<br/>(really uses RAM/CPU/disk/net)"]
+    app -->|GET /metrics| prom["Prometheus<br/>(scrapes every 5s)"]
+    app -->|stdout| promtail["Promtail"] --> loki["Loki"]
+    cadvisor["cAdvisor"] --> prom
+    node["node-exporter"] --> prom
+    prom --> grafana["Grafana dashboard"]
+    loki --> grafana
+```
+
+- **The app** ([app/loadgen.py](app/loadgen.py)) owns the load and updates a Prometheus
+  gauge/counter for each resource. [app/metrics.py](app/metrics.py) also records request
+  rate and latency; [app/logbuffer.py](app/logbuffer.py) keeps the last few hundred log
+  lines for the in-app viewer.
+- **Prometheus** ([monitoring/prometheus/prometheus.yml](monitoring/prometheus/prometheus.yml))
+  scrapes the app, cAdvisor and node-exporter every 5 seconds.
+- **Grafana** ([monitoring/grafana/](monitoring/grafana/)) renders it all, including a
+  Loki-powered logs panel.
+
+> **Why a single Gunicorn worker here?** The compose file runs the app with
+> `--workers 1 --threads 8` on purpose: all the load and all the metrics live in **one**
+> process, so a button click always lands on the process that owns the load. The
+> production image keeps its 2 workers — this override is a teaching convenience, and
+> the comment in [docker-compose.yml](docker-compose.yml) says so.
+
+### Clean up
+
+```bash
+make docker-down     # stop everything, keep the metric/log history
+make docker-clean    # stop AND wipe the volumes for a fresh start
+```
+
+---
+
+### 15.1 The same app on Kubernetes — Docker vs a real orchestrator
+
+Docker Compose is one host running containers. **Kubernetes** is an *orchestrator*: a
+cluster that decides where containers run, restarts them when they die, load-balances
+across copies, and enforces resource limits. The best way to feel the difference is to
+run the *exact same app and dashboard* on both and poke at them.
+
+Everything for this lives in [k8s/](k8s/) and deploys to a local cluster. The Makefile
+targets **OrbStack's built-in Kubernetes** by default (so every object shows up in the
+OrbStack ▸ Kubernetes UI), but you can point them at any cluster with `K8S_CONTEXT=…`.
+
+```bash
+# In OrbStack: Settings ▸ Kubernetes ▸ enable. Then:
+make k8s-up                              # build + deploy everything
+# or target another cluster:
+make k8s-up K8S_CONTEXT=docker-desktop
+```
+
+`make k8s-up` prints the **same URLs** as the Docker path — OrbStack exposes the
+`LoadBalancer` Services on your `localhost`, so http://localhost:3000 is the identical
+Grafana dashboard. That's the headline: **your app and your observability don't change;
+only the runtime underneath does.** (OrbStack even shares its image store with Kubernetes,
+so there's no registry push and no image side-loading — the locally-built image just runs.)
+
+> **Safety:** every `k8s-*` target is pinned to the chosen context
+> (`kubectl --context $(K8S_CONTEXT)`), so these commands can never touch another cluster
+> in your kubeconfig (like a real EKS).
+
+Now run the teaching targets — each prints a short explanation *before* its `kubectl`
+output, so you learn the concept and see it at once:
+
+| Command | What it teaches |
+|---|---|
+| `make k8s-explain` | a Docker-vs-Kubernetes cheat sheet (start here) |
+| `make k8s-status` | Deployments, ReplicaSets, Pods, Services, DaemonSets — the objects Compose never had |
+| `make k8s-pods` | a **Pod** wraps your container and gets its own IP + a restart count |
+| `make k8s-services` | **Services** + endpoints: stable DNS names that load-balance across Pods |
+| `make k8s-heal` | delete the app Pod and watch the Deployment **recreate it** — self-healing |
+| `make k8s-scale` | scale to 3 replicas in one command (and why our in-memory console then misbehaves — the statefulness lesson) |
+| `make k8s-limits` | the app now has **resource requests/limits**; cross the memory limit with the 🧠 button and Kubernetes **OOM-kills and restarts** it |
+| `make k8s-logs` | `kubectl logs` instead of `docker logs` |
+
+The `stress-*` helpers work here too (they hit `localhost:8080` either way).
+
+**A few things that are genuinely different under Kubernetes**, all visible in the repo:
+
+- **Config** is stored as **ConfigMaps** (API objects), not bind-mounted files. The
+  Makefile builds them from the very same `monitoring/` files, so there's one source of
+  truth. ([k8s/10-app.yaml](k8s/10-app.yaml), and the `configmap` steps in the Makefile.)
+- **Networking** changes: Compose published ports with `8080:8080`; here each front-facing
+  Service is `type: LoadBalancer`, and the platform (OrbStack) hands it a localhost address.
+- **Log collection** runs as a **DaemonSet** (one Promtail Pod per node) that tails
+  `/var/log/pods` and ships to Loki. ([k8s/50-promtail.yaml](k8s/50-promtail.yaml) — note
+  the header there: on a Docker-runtime cluster those files are *symlinks* into
+  `/var/lib/docker/containers`, which the DaemonSet also has to mount.)
+- **cAdvisor labels the same container differently** under a Kubernetes runtime than under
+  Docker Compose, so the dashboard's container panels carry *two* queries — one per runtime
+  — and you can watch which one lights up. A small but honest illustration that portability
+  has seams.
+
+Tear it all down with:
+
+```bash
+make k8s-down     # removes our namespace + objects; leaves OrbStack's cluster intact
+```
+
+### Exercises
+
+9. **Add a metric.** Expose a new gauge (say, a "requests in flight" counter) in
+   [app/metrics.py](app/metrics.py) and add a panel for it to the dashboard JSON.
+10. **Alert on it.** Add a Prometheus alerting rule that fires when
+    `app_memory_allocated_bytes` crosses a threshold, and point it at an alert receiver.
+11. **Take it to AWS.** The container-level metrics you see in cAdvisor are exactly the
+    kind CloudWatch collects for a real EC2 box. Wire the deployed app's `/metrics` into
+    a Prometheus running in AWS, or ship its logs to CloudWatch Logs.
+12. **Break a limit.** In [k8s/10-app.yaml](k8s/10-app.yaml) lower the memory `limit` to
+    `256Mi`, `make k8s-up` again, then hold down 🧠 Allocate. Watch `make k8s-pods` — the
+    `RESTARTS` count climbs as Kubernetes OOM-kills and restarts the pod. Compose would
+    have let it eat the whole host.
+13. **Roll it out.** Change the app, `make k8s-up` to rebuild + redeploy, then
+    `kubectl --context orbstack -n workshop rollout restart deployment/app`. Watch a new
+    ReplicaSet take over with zero downtime — then try `rollout undo`.
+14. **From local to EKS.** These manifests are vanilla Kubernetes. The real graduation
+    exercise: push the image to ECR and `kubectl apply -f k8s/` against an EKS cluster.
+    The `LoadBalancer` Services that OrbStack fulfils on localhost become real AWS load
+    balancers in the cloud — same files, real infrastructure.
 
 Happy shipping. 🚀

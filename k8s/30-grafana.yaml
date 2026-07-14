@@ -1,0 +1,77 @@
+# =============================================================================
+# Grafana — the dashboards. Byte-for-byte the same provisioning and dashboard
+# JSON as the Docker stack, delivered here as three ConfigMaps (built by the
+# Makefile from monitoring/grafana/). Because the datasource URLs point at the
+# Service names "prometheus" and "loki", they resolve unchanged in the cluster.
+#
+# The upshot: `make docker-up` and `make k8s-up` show the IDENTICAL dashboard.
+# That's the point — your observability doesn't care which runtime you picked.
+# =============================================================================
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: workshop
+  labels:
+    app: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.1.0
+          ports:
+            - containerPort: 3000
+          env:
+            # Anonymous admin access so the dashboard "just opens" — demo only.
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: "Admin"
+            - name: GF_AUTH_DISABLE_LOGIN_FORM
+              value: "true"
+            - name: GF_USERS_DEFAULT_THEME
+              value: "dark"
+          volumeMounts:
+            # Datasources + dashboard provider + the dashboard JSON, each mounted
+            # where Grafana expects to find it on startup.
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboard-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+      volumes:
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboard-provider
+          configMap:
+            name: grafana-dashboard-provider
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: workshop
+  labels:
+    app: grafana
+spec:
+  type: LoadBalancer  # OrbStack exposes this on localhost:3000
+  selector:
+    app: grafana
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000

@@ -1,0 +1,23 @@
+# Grafana datasource provisioning (config as code).
+#
+# Instead of clicking "Add datasource" in the UI, Grafana reads this file on
+# startup and wires both datasources automatically. Hostnames are docker-compose
+# service names, reachable on the shared Docker network.
+apiVersion: 1
+
+datasources:
+  # Metrics come from Prometheus. The fixed uid lets the dashboard JSON
+  # reference this datasource without knowing a randomly-generated id.
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+
+  # Logs come from Loki (used by the "Logs" panel on the dashboard).
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100

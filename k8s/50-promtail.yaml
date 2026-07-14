@@ -1,0 +1,103 @@
+# =============================================================================
+# Promtail — tails pod logs on the node and ships them to Loki.
+#
+# It runs as a DaemonSet: exactly one Promtail pod PER NODE, so every node's
+# logs get collected. (Compose had no concept of "one per node".)
+#
+# HOW IT FINDS LOGS. Kubernetes writes each container's stdout/stderr under
+# /var/log/pods/<namespace>_<pod>_<uid>/<container>/*.log. We tail those files
+# directly with a static path and derive the namespace/pod/container labels from
+# the file path. This is runtime-agnostic and needs no Kubernetes API access
+# (hence no RBAC here) — which makes it reliable across clusters, including
+# OrbStack's Docker-based runtime.
+#
+# THE DOCKER-RUNTIME CATCH. On the Docker runtime (which OrbStack uses), those
+# files are SYMLINKS into /var/lib/docker/containers/<id>/<id>-json.log, so
+# Promtail must mount that directory too — otherwise it follows the link to a
+# path it can't read and nothing reaches Loki. The `docker: {}` pipeline stage
+# then unwraps Docker's {"log","stream","time"} JSON envelope.
+# =============================================================================
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: promtail-config
+  namespace: workshop
+data:
+  promtail-config.yml: |
+    server:
+      http_listen_port: 9080
+      log_level: warn
+    positions:
+      filename: /run/promtail/positions.yaml
+    clients:
+      - url: http://loki:3100/loki/api/v1/push
+    scrape_configs:
+      - job_name: workshop-pods
+        static_configs:
+          - targets: [localhost]
+            labels:
+              job: workshop-pods
+              # Only our namespace, to keep the demo tidy.
+              __path__: /var/log/pods/workshop_*/*/*.log
+        pipeline_stages:
+          # 1. Unwrap Docker's json-file envelope → the real log line + timestamp.
+          - docker: {}
+          # 2. Pull namespace/pod/container out of the file path.
+          - regex:
+              source: filename
+              expression: '/var/log/pods/(?P<namespace>[^_/]+)_(?P<pod>.+)_[^_/]+/(?P<container>[^/]+)/[0-9]+\.log'
+          # 3. Promote them to Loki labels. The `container` label matches the
+          #    Docker stack, so the SAME Grafana panel ({container="workshop-app"})
+          #    works in both runtimes.
+          - labels:
+              namespace:
+              pod:
+              container:
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: promtail
+  namespace: workshop
+  labels:
+    app: promtail
+spec:
+  selector:
+    matchLabels:
+      app: promtail
+  template:
+    metadata:
+      labels:
+        app: promtail
+    spec:
+      containers:
+        - name: promtail
+          image: grafana/promtail:3.0.0
+          args: ["-config.file=/etc/promtail/promtail-config.yml"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/promtail
+            - name: positions
+              mountPath: /run/promtail
+            # The node's pod logs (symlinks on the Docker runtime).
+            - name: pods
+              mountPath: /var/log/pods
+              readOnly: true
+            # The symlink targets — required on the Docker runtime (see header).
+            - name: docker-containers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: promtail-config
+        - name: positions
+          emptyDir: {}
+        - name: pods
+          hostPath:
+            path: /var/log/pods
+        - name: docker-containers
+          hostPath:
+            path: /var/lib/docker/containers
+            type: DirectoryOrCreate

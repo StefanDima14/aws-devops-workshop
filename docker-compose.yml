@@ -1,0 +1,142 @@
+# -----------------------------------------------------------------------------
+# Local observability stack — the "monitoring" step of the workshop.
+#
+# One command (`make up`) brings up the app together with a full, self-contained
+# monitoring pipeline:
+#
+#   app         the Flask app + Ops Console, exposing /metrics
+#   prometheus  scrapes /metrics and stores the time series
+#   grafana     dashboards, pre-provisioned to point at Prometheus + Loki
+#   cadvisor    per-container CPU/memory/network/disk (corroborates the app's
+#               own numbers with what the OS actually sees)
+#   node-exporter  host-level metrics (the machine underneath the containers)
+#   loki        stores logs
+#   promtail    tails container stdout and ships it to Loki
+#
+# It needs no AWS and no internet: the app talks to itself over the loopback
+# interface to generate network load. Everything is wired together on one
+# Docker network so services find each other by name (e.g. http://app:8080).
+# -----------------------------------------------------------------------------
+services:
+  # --- The application under observation -------------------------------------
+  app:
+    build: ./app
+    container_name: workshop-app  # fixed name so cAdvisor/Promtail can label it
+    ports:
+      - "8080:8080"
+    environment:
+      # A short presign expiry etc. isn't needed locally; no bucket = fallback video.
+      APP_VERSION: "monitoring-demo"
+      LOG_LEVEL: "INFO"
+      # The network-load workers pull from the app itself over loopback.
+      APP_SELF_URL: "http://127.0.0.1:8080"
+      # The "disk load" button writes here (the mounted named volume below).
+      LOAD_DATA_DIR: "/data/loadgen"
+    # IMPORTANT: a single worker with threads keeps all load + metrics state in
+    # one process, so a button click always hits the process that owns the load.
+    # (The production image defaults to 2 workers; here we override on purpose.)
+    command: ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "app:app"]
+    volumes:
+      - loadgen-data:/data  # the "disk load" button writes here
+    restart: unless-stopped
+
+  # --- Metrics: Prometheus ---------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: workshop-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=6h"  # tiny retention: this is a demo
+    restart: unless-stopped
+
+  # --- Dashboards: Grafana ---------------------------------------------------
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: workshop-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      # Anonymous, no-login access so the workshop "just opens" in a browser.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_USERS_DEFAULT_THEME: "dark"
+    volumes:
+      # Datasources + dashboards are provisioned from files (config as code) so
+      # the dashboard is there the moment Grafana starts — nothing to click.
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+
+  # --- Container metrics: cAdvisor -------------------------------------------
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: workshop-cadvisor
+    ports:
+      - "8081:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    privileged: true       # cAdvisor needs broad read access to the host
+    devices:
+      - /dev/kmsg
+    restart: unless-stopped
+
+  # --- Host metrics: node-exporter -------------------------------------------
+  node-exporter:
+    image: prom/node-exporter:v1.8.1
+    container_name: workshop-node-exporter
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/rootfs"
+    restart: unless-stopped
+
+  # --- Logs: Loki + Promtail -------------------------------------------------
+  loki:
+    image: grafana/loki:3.0.0
+    container_name: workshop-loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./monitoring/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki-data:/loki
+    command: ["-config.file=/etc/loki/loki-config.yml"]
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:3.0.0
+    container_name: workshop-promtail
+    volumes:
+      - ./monitoring/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      # Read the containers' stdout logs straight off the Docker host.
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: ["-config.file=/etc/promtail/promtail-config.yml"]
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+# Named volumes keep metric/log history across `make up` / `make down`.
+volumes:
+  loadgen-data:
+  prometheus-data:
+  grafana-data:
+  loki-data:
